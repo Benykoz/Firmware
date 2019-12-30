@@ -70,6 +70,8 @@ const uint16_t MPU9250::_mpu9250_checked_registers[MPU9250_NUM_CHECKED_REGISTERS
 										      MPUREG_INT_PIN_CFG
 										    };
 
+using namespace time_literals;
+
 MPU9250::MPU9250(device::Device *interface, device::Device *mag_interface, enum Rotation rotation) :
 	ScheduledWorkItem(MODULE_NAME, px4::device_bus_to_wq(interface->get_device_id())),
 	_interface(interface),
@@ -78,6 +80,7 @@ MPU9250::MPU9250(device::Device *interface, device::Device *mag_interface, enum 
 	_mag(this, mag_interface, rotation),
 	_dlpf_freq(MPU9250_DEFAULT_ONCHIP_FILTER_FREQ),
 	_sample_perf(perf_alloc(PC_ELAPSED, MODULE_NAME": read")),
+	_mag_sample_perf(perf_alloc(PC_ELAPSED, MODULE_NAME": mag read")),
 	_bad_transfers(perf_alloc(PC_COUNT, MODULE_NAME": bad_trans")),
 	_bad_registers(perf_alloc(PC_COUNT, MODULE_NAME": bad_reg")),
 	_good_transfers(perf_alloc(PC_COUNT, MODULE_NAME": good_trans")),
@@ -94,6 +97,7 @@ MPU9250::~MPU9250()
 
 	// delete the perf counter
 	perf_free(_sample_perf);
+	perf_free(_mag_sample_perf);
 	perf_free(_bad_transfers);
 	perf_free(_bad_registers);
 	perf_free(_good_transfers);
@@ -571,26 +575,6 @@ MPU9250::check_registers()
 }
 
 bool
-MPU9250::check_null_data(uint16_t *data, uint8_t size)
-{
-	while (size--) {
-		if (*data++) {
-			perf_count(_good_transfers);
-			return false;
-		}
-	}
-
-	// all zero data - probably a SPI bus error
-	perf_count(_bad_transfers);
-	perf_end(_sample_perf);
-	// note that we don't call reset() here as a reset()
-	// costs 20ms with interrupts disabled. That means if
-	// the mpu9250 does go bad it would cause a FMU failure,
-	// regardless of whether another sensor is available,
-	return true;
-}
-
-bool
 MPU9250::check_duplicate(uint8_t *accel_data)
 {
 	/*
@@ -628,30 +612,18 @@ MPU9250::measure()
 
 	MPUReport mpu_report{};
 
-	struct Report {
-		int16_t		accel_x;
-		int16_t		accel_y;
-		int16_t		accel_z;
-		int16_t		temp;
-		int16_t		gyro_x;
-		int16_t		gyro_y;
-		int16_t		gyro_z;
-	} report{};
-
 	const hrt_abstime timestamp_sample = hrt_absolute_time();
 
 	// Fetch the full set of measurements from the ICM20948 in one pass
 	if (_mag.is_passthrough() && _register_wait == 0) {
-		if (_whoami == MPU_WHOAMI_9250 || _whoami == MPU_WHOAMI_6500) {
-			if (OK != read_reg_range(MPUREG_INT_STATUS, MPU9250_HIGH_BUS_SPEED, (uint8_t *)&mpu_report, sizeof(mpu_report))) {
-				perf_end(_sample_perf);
-				return;
-			}
+		if (OK != read_reg_range(MPUREG_ACCEL_XOUT_H, MPU9250_HIGH_BUS_SPEED, (uint8_t *)&mpu_report, sizeof(mpu_report))) {
+			perf_end(_sample_perf);
+			return;
 		}
 
 		check_registers();
 
-		if (check_duplicate(&mpu_report.accel_x[0])) {
+		if (check_duplicate(&mpu_report.ACCEL_XOUT_H)) {
 			return;
 		}
 	}
@@ -666,8 +638,24 @@ MPU9250::measure()
 	if (_mag.is_passthrough()) {
 #   endif
 
-		if (_register_wait == 0) {
-			_mag._measure(timestamp_sample, mpu_report.mag);
+		if (_register_wait == 0 && hrt_elapsed_time(&_last_mag_update) > 10_ms) {
+			perf_begin(_mag_sample_perf);
+
+			struct ak8963_report {
+				uint8_t cmd;
+				struct ak8963_regs mag;
+			} mag_report{};
+
+			if (OK != read_reg_range(MPUREG_EXT_SENS_DATA_00, MPU9250_HIGH_BUS_SPEED, (uint8_t *)&mag_report, sizeof(mag_report))) {
+				perf_end(_mag_sample_perf);
+				perf_end(_sample_perf);
+				return;
+			}
+
+			_mag._measure(timestamp_sample, mag_report.mag);
+
+			_last_mag_update = hrt_absolute_time();
+			perf_end(_mag_sample_perf);
 		}
 
 #   ifdef USE_I2C
@@ -678,28 +666,35 @@ MPU9250::measure()
 
 #   endif
 
+	struct Report {
+		int16_t		accel_x;
+		int16_t		accel_y;
+		int16_t		accel_z;
+		int16_t		temp;
+		int16_t		gyro_x;
+		int16_t		gyro_y;
+		int16_t		gyro_z;
+	} report{};
+
 	// Continue evaluating gyro and accelerometer results
 	if (_register_wait == 0) {
 		// Convert from big to little endian
-		report.accel_x = int16_t_from_bytes(mpu_report.accel_x);
-		report.accel_y = int16_t_from_bytes(mpu_report.accel_y);
-		report.accel_z = int16_t_from_bytes(mpu_report.accel_z);
-		report.temp    = int16_t_from_bytes(mpu_report.temp);
-		report.gyro_x  = int16_t_from_bytes(mpu_report.gyro_x);
-		report.gyro_y  = int16_t_from_bytes(mpu_report.gyro_y);
-		report.gyro_z  = int16_t_from_bytes(mpu_report.gyro_z);
+		report.accel_x = combine(mpu_report.ACCEL_XOUT_H, mpu_report.ACCEL_XOUT_L);
+		report.accel_y = combine(mpu_report.ACCEL_YOUT_H, mpu_report.ACCEL_YOUT_L);
+		report.accel_z = combine(mpu_report.ACCEL_ZOUT_H, mpu_report.ACCEL_ZOUT_L);
+		report.temp    = combine(mpu_report.TEMP_OUT_H, mpu_report.TEMP_OUT_L);
+		report.gyro_x  = combine(mpu_report.GYRO_XOUT_H, mpu_report.GYRO_XOUT_L);
+		report.gyro_y  = combine(mpu_report.GYRO_YOUT_H, mpu_report.GYRO_YOUT_L);
+		report.gyro_z  = combine(mpu_report.GYRO_ZOUT_H, mpu_report.GYRO_ZOUT_L);
 
-		if (check_null_data((uint16_t *)&report, sizeof(report) / 2)) {
-			return;
-		}
-	}
-
-	if (_register_wait != 0) {
+	} else {
 		/*
 		 * We are waiting for some good transfers before using the sensor again.
 		 * We still increment _good_transfers, but don't return any data yet.
 		*/
 		_register_wait--;
+
+		perf_end(_sample_perf);
 		return;
 	}
 
@@ -743,6 +738,7 @@ void
 MPU9250::print_info()
 {
 	perf_print_counter(_sample_perf);
+	perf_print_counter(_mag_sample_perf);
 	perf_print_counter(_bad_transfers);
 	perf_print_counter(_bad_registers);
 	perf_print_counter(_good_transfers);

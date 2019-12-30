@@ -94,11 +94,13 @@ class MPU9250;
 
 #pragma pack(push, 1)
 struct ak8963_regs {
-	uint8_t st1;
-	int16_t x;
-	int16_t y;
-	int16_t z;
-	uint8_t st2;
+	uint8_t ST1;
+	uint8_t HXL;
+	uint8_t HXH;
+	uint8_t HYL;
+	uint8_t HYH;
+	uint8_t HZL;
+	uint8_t HZH;
 };
 #pragma pack(pop)
 

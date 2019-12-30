@@ -106,11 +106,6 @@ MPU9250_mag::measure()
 		return;
 	}
 
-	/* Monitor magnetic sensor overflow flag. */
-	if (data.st2 & 0x08) {
-		perf_count(_mag_overflows);
-	}
-
 	_measure(timestamp_sample, data);
 }
 
@@ -128,7 +123,7 @@ MPU9250_mag::_measure(hrt_abstime timestamp_sample, ak8963_regs data)
 	 * is not set. This has lead to intermittent spikes when the data was
 	 * being updated while getting read.
 	 */
-	if (!(data.st1 & AK09916_ST1_DRDY)) {
+	if (!(data.ST1 & AK09916_ST1_DRDY)) {
 		return;
 	}
 
@@ -139,7 +134,10 @@ MPU9250_mag::_measure(hrt_abstime timestamp_sample, ak8963_regs data)
 	 * Align axes - note the accel & gyro are also re-aligned so this
 	 *              doesn't look obvious with the datasheet
 	 */
-	_px4_mag.update(timestamp_sample, data.x, -data.y, -data.z);
+	int16_t x = combine(data.HXH, data.HXL);
+	int16_t y = -combine(data.HYH, data.HYL);
+	int16_t z = -combine(data.HZH, data.HZL);
+	_px4_mag.update(timestamp_sample, x, y, z);
 }
 
 void

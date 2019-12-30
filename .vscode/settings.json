@@ -96,5 +96,7 @@
         "workbench.editor.highlightModifiedTabs": true,
         "workbench.enableExperiments": false,
         "workbench.settings.enableNaturalLanguageSearch": false,
-        "workbench.statusBar.feedback.visible": false
+        "workbench.statusBar.feedback.visible": false,
+        "editor.smoothScrolling": false,
+        "window.smoothScrollingWorkaround": false
 }
