@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (C) 2012-2013 PX4 Development Team. All rights reserved.
+ *   Copyright (C) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -43,10 +43,7 @@
 
 #include <drivers/device/i2c.h>
 #include <drivers/device/device.h>
-#include <drivers/device/ringbuffer.h>
 #include <drivers/device/spi.h>
-#include <drivers/drv_baro.h>
-#include <lib/cdev/CDev.hpp>
 #include <lib/perf/perf_counter.h>
 #include <px4_platform_common/getopt.h>
 #include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
